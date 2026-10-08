@@ -19,6 +19,12 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
 # -------------------------------------------------------------
+# MAKLUMAT VERSI & TARIKH KEMASKINI KOD
+# -------------------------------------------------------------
+APP_VERSION = "2.6.0"
+LAST_UPDATED_DATE = "08 Oktober 2026"
+
+# -------------------------------------------------------------
 # KONFIGURASI LAMAN WEB STREAMLIT
 # -------------------------------------------------------------
 st.set_page_config(
@@ -72,7 +78,7 @@ components.html(st_security_script, height=0, width=0)
 # -------------------------------------------------------------
 # CARIAN LOGO UNTUK KAD HAKCIPTA
 # -------------------------------------------------------------
-possible_logos = ["logo.png", "logo.jpg", "logo.jpeg", "SEKOLAH.png", "SEKOLAH.jpg"]
+possible_logos = ["logo.png", "logo.jpg", "logo.jpeg", "SEKOLAH.png", "SEKOLAH.jpg", "SEKOLAH.PNG"]
 logo_path = None
 
 for f in possible_logos:
@@ -137,7 +143,7 @@ st.divider()
 # -------------------------------------------------------------
 # BAHAGIAN 1: MUAT NAIK FAIL PDF KALENDAR PERSEKOLAHAN KPM (WAJIB)
 # -------------------------------------------------------------
-st.header("1. 📄 Memuat Naik Fail PDF Kalendar Persekolahan KPM (WAJIB)")
+st.header("📄 Memuat Naik Fail PDF Kalendar Persekolahan KPM (WAJIB)")
 
 uploaded_file = st.file_uploader(
     "Sila muat naik fail PDF Kalendar Persekolahan Rasmi KPM terlebih dahulu untuk menjana kalender",
@@ -153,7 +159,9 @@ pdf_text = ""
 try:
     reader = pypdf.PdfReader(uploaded_file)
     for page in reader.pages:
-        pdf_text += page.extract_text() + "\n"
+        extracted = page.extract_text()
+        if extracted:
+            pdf_text += extracted + "\n"
     
     match_tahun = re.search(r"TAHUN\s+(\d{4})", pdf_text, re.IGNORECASE)
     tahun_detected = int(match_tahun.group(1)) if match_tahun else datetime.now().year + 1
@@ -233,32 +241,75 @@ sasaran_akademik = st.sidebar.number_input(
 )
 
 # -------------------------------------------------------------
-# BAHAGIAN 2: PENETAPAN CUTI PENGGAL & PERAYAAN KPM AUTOMATIK
+# BAHAGIAN 2: PENETAPAN CUTI PENGGAL & PERAYAAN (PARSER PERBAIKAN)
 # -------------------------------------------------------------
-if is_kumpulan_a:
-    cuti_penggal_kpm = [
-        (date(tahun, 3, 5), date(tahun, 3, 13), "CUTI PENGGAL 1"),
-        (date(tahun, 5, 21), date(tahun, 6, 5), "CUTI PERTENGAHAN TAHUN"),
-        (date(tahun, 8, 27), date(tahun, 9, 4), "CUTI PENGGAL 2"),
-        (date(tahun, 12, 3), date(tahun, 12, 31), "CUTI AKHIR PERSEKOLAHAN"),
-    ]
-    cuti_perayaan_kpm = [
-        (date(tahun, 2, 8), date(tahun, 2, 10), "CUTI PERAYAAN - TAHUN BAHARU CINA"),
-        (date(tahun, 5, 16), date(tahun, 5, 19), "CUTI PERAYAAN - HARI RAYA AIDILADHA"),
-        (date(tahun, 10, 27), date(tahun, 10, 28), "CUTI PERAYAAN - HARI DEEPAVALI"),
-    ]
-else:
-    cuti_penggal_kpm = [
-        (date(tahun, 3, 6), date(tahun, 3, 14), "CUTI PENGGAL 1"),
-        (date(tahun, 5, 22), date(tahun, 6, 6), "CUTI PERTENGAHAN TAHUN"),
-        (date(tahun, 8, 28), date(tahun, 9, 5), "CUTI PENGGAL 2"),
-        (date(tahun, 12, 4), date(tahun, 12, 31), "CUTI AKHIR PERSEKOLAHAN"),
-    ]
-    cuti_perayaan_kpm = [
-        (date(tahun, 2, 5), date(tahun, 2, 12), "CUTI PERAYAAN - TAHUN BAHARU CINA"),
-        (date(tahun, 5, 18), date(tahun, 5, 19), "CUTI PERAYAAN - HARI RAYA AIDILADHA"),
-        (date(tahun, 10, 27), date(tahun, 10, 29), "CUTI PERAYAAN - HARI DEEPAVALI"),
-    ]
+def standardize_malay_dates(text, current_year):
+    """Menukar nama bulan Bahasa Melayu kepada format angka ISO (DD-MM-YYYY)"""
+    months_map = {
+        "januari": "01", "jan": "01", "februari": "02", "feb": "02",
+        "mac": "03", "march": "03", "april": "04", "apr": "04",
+        "mei": "05", "may": "05", "jun": "06", "june": "06",
+        "julai": "07", "july": "07", "ogos": "08", "august": "08", "aug": "08",
+        "september": "09", "sep": "09", "oktober": "10", "october": "10", "okt": "10", "oct": "10",
+        "november": "11", "nov": "11", "disember": "12", "december": "12", "dis": "12", "dec": "12"
+    }
+    
+    # Penukaran perkataan ejaan tarikh kepada format bermula DD.MM.YYYY
+    pattern_text = r"(\d{1,2})\s+([a-zA-Z]+)\s*(\d{4})?\s*[-–thingga]+\s*(\d{1,2})\s+([a-zA-Z]+)\s+(\d{4})"
+    
+    def replace_date(match):
+        d1, m1_str, y1, d2, m2_str, y2 = match.groups()
+        m1 = months_map.get(m1_str.lower(), "01")
+        m2 = months_map.get(m2_str.lower(), "01")
+        y1 = y1 if y1 else y2
+        return f"{int(d1):02d}-{m1}-{y1} hingga {int(d2):02d}-{m2}-{y2}"
+
+    return re.sub(pattern_text, replace_date, text, flags=re.IGNORECASE)
+
+pdf_text_std = standardize_malay_dates(pdf_text, tahun)
+
+cuti_penggal_kpm = []
+cuti_perayaan_kpm = []
+
+# Ekstraksi Angka ISO (DD-MM-YYYY hingga DD-MM-YYYY)
+date_pattern_num = r"(\d{2}[\./-]\d{2}[\./-]\d{4})\s*[-–thingga]+\s*(\d{2}[\./-]\d{2}[\./-]\d{4})"
+matches_num = re.findall(date_pattern_num, pdf_text_std)
+
+if matches_num and len(matches_num) >= 3:
+    for idx, (str_mula, str_tamat) in enumerate(matches_num):
+        try:
+            d_mula = datetime.strptime(re.sub(r'[\./]', '-', str_mula), "%d-%m-%Y").date()
+            d_tamat = datetime.strptime(re.sub(r'[\./]', '-', str_tamat), "%d-%m-%Y").date()
+            cuti_penggal_kpm.append((d_mula, d_tamat, f"CUTI PENGGAL / SEKOLAH {idx+1}"))
+        except ValueError:
+            pass
+
+# Fallback keselamatan jika ekstraksi PDF kurang daripada 3 penggal
+if len(cuti_penggal_kpm) < 3:
+    if is_kumpulan_a:
+        cuti_penggal_kpm = [
+            (date(tahun, 3, 5), date(tahun, 3, 13), "CUTI PENGGAL 1"),
+            (date(tahun, 5, 21), date(tahun, 6, 5), "CUTI PERTENGAHAN TAHUN"),
+            (date(tahun, 8, 27), date(tahun, 9, 4), "CUTI PENGGAL 2"),
+            (date(tahun, 12, 3), date(tahun, 12, 31), "CUTI AKHIR PERSEKOLAHAN"),
+        ]
+        cuti_perayaan_kpm = [
+            (date(tahun, 2, 8), date(tahun, 2, 10), "CUTI PERAYAAN - TAHUN BAHARU CINA"),
+            (date(tahun, 5, 16), date(tahun, 5, 19), "CUTI PERAYAAN - HARI RAYA AIDILADHA"),
+            (date(tahun, 10, 27), date(tahun, 10, 28), "CUTI PERAYAAN - HARI DEEPAVALI"),
+        ]
+    else:
+        cuti_penggal_kpm = [
+            (date(tahun, 3, 6), date(tahun, 3, 14), "CUTI PENGGAL 1"),
+            (date(tahun, 5, 22), date(tahun, 6, 6), "CUTI PERTENGAHAN TAHUN"),
+            (date(tahun, 8, 28), date(tahun, 9, 5), "CUTI PENGGAL 2"),
+            (date(tahun, 12, 4), date(tahun, 12, 31), "CUTI AKHIR PERSEKOLAHAN"),
+        ]
+        cuti_perayaan_kpm = [
+            (date(tahun, 2, 5), date(tahun, 2, 12), "CUTI PERAYAAN - TAHUN BAHARU CINA"),
+            (date(tahun, 5, 18), date(tahun, 5, 19), "CUTI PERAYAAN - HARI RAYA AIDILADHA"),
+            (date(tahun, 10, 27), date(tahun, 10, 29), "CUTI PERAYAAN - HARI DEEPAVALI"),
+        ]
 
 kod_subdiv = map_negeri_holidays.get(negeri_pilihan, "SBH")
 cuti_google_cal = holidays.Malaysia(years=tahun, subdiv=kod_subdiv)
@@ -272,20 +323,25 @@ for w in range(1, 53):
 
     sabtu_dt = (mula_dt - timedelta(days=1)) if is_kumpulan_a else (mula_dt + timedelta(days=5))
     sat_occ = (sabtu_dt.day - 1) // 7 + 1
-    kokum = f"M{sat_occ}" if sat_occ in [2, 4] else ""
 
     default_jenis = "PdP / PdPr"
     catatan_list = []
 
+    is_cuti_sekolah_week = False
     for c_mula, c_tamat, c_nama in cuti_penggal_kpm:
         if not (c_tamat < mula_dt or c_mula > tamat_dt):
             default_jenis = "Cuti Sekolah"
+            is_cuti_sekolah_week = True
             catatan_list.append(f"{c_nama} ({c_mula.strftime('%d/%m/%Y')} - {c_tamat.strftime('%d/%m/%Y')})")
             break
 
     for p_mula, p_tamat, p_nama in cuti_perayaan_kpm:
         if not (p_tamat < mula_dt or p_mula > tamat_dt):
+            is_cuti_sekolah_week = True
             catatan_list.append(f"{p_nama} ({p_mula.strftime('%d/%m/%Y')} - {p_tamat.strftime('%d/%m/%Y')})")
+
+    # SABTU KERJA HANYA DITANDA JIKA MINGGU TERSEBUT BUKAN MINGGU CUTI
+    sabtu_kerja = f"M{sat_occ}" if (sat_occ in [2, 4] and not is_cuti_sekolah_week) else ""
 
     for u_mula, u_tamat, u_nama in cuti_umum_list:
         if not (u_tamat < mula_dt or u_mula > tamat_dt):
@@ -303,41 +359,67 @@ for w in range(1, 53):
         "Minggu Kalendar": f"Minggu {w}",
         "Tarikh Mula": mula_dt.strftime("%d/%m/%Y"),
         "Tarikh Tamat": tamat_dt.strftime("%d/%m/%Y"),
-        "Sabtu Kokum": kokum,
+        "Sabtu Kerja": sabtu_kerja,
         "Jenis Minggu": default_jenis,
         "Catatan / Peristiwa": default_catatan,
         "_mula_dt": mula_dt,
         "_tamat_dt": tamat_dt,
+        "_bulan": mula_dt.strftime("%B %Y"),
     })
 
 df_input = pd.DataFrame(data_rows)
 
 # -------------------------------------------------------------
-# PAPARAN DATA EDITOR
+# PAPARAN DATA EDITOR BERSAMA PENAPIS BULAN
 # -------------------------------------------------------------
-st.header(f"2. 🗓️ Tetapan Kalender Mingguan ({negeri_pilihan} - {peringkat_sekolah})")
+st.header(f"🗓️ Tetapan Kalender Mingguan ({negeri_pilihan} - {peringkat_sekolah})")
+
+col_filter1, _ = st.columns([1.5, 2.5])
+with col_filter1:
+    senarai_bulan = ["Semua Bulan"] + list(df_input["_bulan"].unique())
+    bulan_pilihan = st.selectbox("📌 Penapis Paparan Bulan:", senarai_bulan, index=0)
+
+if bulan_pilihan != "Semua Bulan":
+    df_filtered_view = df_input[df_input["_bulan"] == bulan_pilihan]
+else:
+    df_filtered_view = df_input
+
+senarai_pilihan_minggu = [
+    "PdP / PdPr", 
+    "Pentaksiran", 
+    "Peperiksaan", 
+    "Amali", 
+    "Bukan Akademik", 
+    "Cuti Sekolah"
+]
 
 edited_df = st.data_editor(
-    df_input[["Minggu Kalendar", "Tarikh Mula", "Tarikh Tamat", "Sabtu Kokum", "Jenis Minggu", "Catatan / Peristiwa"]],
+    df_filtered_view[["Minggu Kalendar", "Tarikh Mula", "Tarikh Tamat", "Sabtu Kerja", "Jenis Minggu", "Catatan / Peristiwa"]],
     column_config={
         "Jenis Minggu": st.column_config.SelectboxColumn(
             "Jenis Minggu",
-            options=["PdP / PdPr", "Cuti Sekolah", "Bukan Akademik"],
+            options=senarai_pilihan_minggu,
             required=True,
         ),
         "Catatan / Peristiwa": st.column_config.TextColumn("Catatan / Peristiwa"),
         "Minggu Kalendar": st.column_config.Column(disabled=True),
         "Tarikh Mula": st.column_config.Column(disabled=True),
         "Tarikh Tamat": st.column_config.Column(disabled=True),
-        "Sabtu Kokum": st.column_config.Column(disabled=True),
+        "Sabtu Kerja": st.column_config.Column(disabled=True),
     },
     use_container_width=True,
     num_rows="fixed",
     height=400,
 )
 
+# Kemaskini semula ke DataFrame Induk tanpa ralat offset
+for _, row_f in edited_df.iterrows():
+    m_key = row_f["Minggu Kalendar"]
+    df_input.loc[df_input["Minggu Kalendar"] == m_key, "Jenis Minggu"] = row_f["Jenis Minggu"]
+    df_input.loc[df_input["Minggu Kalendar"] == m_key, "Catatan / Peristiwa"] = row_f["Catatan / Peristiwa"]
+
 # -------------------------------------------------------------
-# BAHAGIAN 3: PENGIRAAN MINGGU AKADEMIK, BUKAN AKADEMIK & HARI PERSEKOLAHAN
+# BAHAGIAN 3: PENGIRAAN HARI PERSEKOLAHAN PERSENDIRIAN & MINGGU AKADEMIK
 # -------------------------------------------------------------
 final_rows = []
 running_academic_counter = 0
@@ -345,26 +427,32 @@ minggu_persekolahan_kpm = 0
 minggu_bukan_akademik = 0
 jumlah_hari_persekolahan = 0
 
-for idx, row in edited_df.iterrows():
-    mula_dt = df_input.loc[idx, "_mula_dt"]
-    tamat_dt = df_input.loc[idx, "_tamat_dt"]
+jenis_akademik_list = ["PdP / PdPr", "Pentaksiran", "Peperiksaan", "Amali"]
+
+all_holidays_dates = set()
+for dt_h in cuti_google_cal.keys():
+    all_holidays_dates.add(dt_h)
+for p_mula, p_tamat, _ in cuti_perayaan_kpm:
+    curr = p_mula
+    while curr <= p_tamat:
+        all_holidays_dates.add(curr)
+        curr += timedelta(days=1)
+
+for idx, row in df_input.iterrows():
+    mula_dt = row["_mula_dt"]
+    tamat_dt = row["_tamat_dt"]
     jenis = row["Jenis Minggu"]
 
     if jenis != "Cuti Sekolah":
         minggu_persekolahan_kpm += 1
 
-        hari_dalam_minggu = 5
-        for u_mula, u_tamat, _ in cuti_umum_list:
-            if mula_dt <= u_mula <= tamat_dt:
-                hari_dalam_minggu -= 1
-        
-        for p_mula, p_tamat, _ in cuti_perayaan_kpm:
-            if mula_dt <= p_mula <= tamat_dt:
-                hari_dalam_minggu -= 1
+        curr_day = mula_dt
+        while curr_day <= tamat_dt:
+            if curr_day not in all_holidays_dates:
+                jumlah_hari_persekolahan += 1
+            curr_day += timedelta(days=1)
 
-        jumlah_hari_persekolahan += max(0, hari_dalam_minggu)
-
-    if jenis == "PdP / PdPr":
+    if jenis in jenis_akademik_list:
         if running_academic_counter < sasaran_akademik:
             running_academic_counter += 1
             bil_akademik = str(running_academic_counter)
@@ -390,7 +478,7 @@ for idx, row in edited_df.iterrows():
         "Minggu Kalendar": row["Minggu Kalendar"],
         "Tarikh Mula": row["Tarikh Mula"],
         "Tarikh Tamat": row["Tarikh Tamat"],
-        "Sabtu Kokum": row["Sabtu Kokum"],
+        "Sabtu Kerja": row["Sabtu Kerja"],
         "Jenis Minggu": jenis,
         "Minggu Akademik": bil_akademik,
         "Catatan / Peristiwa": row["Catatan / Peristiwa"],
@@ -403,8 +491,8 @@ for idx, row in edited_df.iterrows():
 baki_hari = jumlah_hari_persekolahan - 190
 if baki_hari > 0:
     cuti_peristiwa_layak = min(4, baki_hari)
-    status_cuti_txt = f"Layak {cuti_peristiwa_layak} Hari (Lebihan {baki_hari} Hari)"
-    status_cuti = f"✅ Layak **{cuti_peristiwa_layak} Hari** (Lebihan {baki_hari} Hari)"
+    status_cuti_txt = f"Layak Dipohon: {cuti_peristiwa_layak} Hari (Lebihan {baki_hari} Hari)*"
+    status_cuti = f"✅ Layak Dipohon **{cuti_peristiwa_layak} Hari** (Lebihan {baki_hari} Hari)*\n\n_\*Tertakluk kepada kelulusan JPN/PPD & SPI KPM._"
 else:
     cuti_peristiwa_layak = 0
     status_cuti_txt = "Tidak Layak (<= 190 Hari)"
@@ -419,13 +507,13 @@ st.sidebar.header("📊 Analisis Persekolahan KPM")
 st.sidebar.metric(
     label="Minggu Persekolahan KPM",
     value=f"{minggu_persekolahan_kpm} Minggu",
-    delta=f"PdP: {running_academic_counter} M | Bukan Akademik: {minggu_bukan_akademik} M",
-    help="Jumlah minggu sekolah dibuka (PdP/PdPr + Bukan Akademik)."
+    delta=f"Minggu Akademik: {running_academic_counter} M | Bukan Akademik: {minggu_bukan_akademik} M",
+    help="Jumlah minggu sekolah dibuka (Akademik + Bukan Akademik)."
 )
 
 col_sb1, col_sb2 = st.sidebar.columns(2)
 with col_sb1:
-    st.metric("Minggu PdP", f"{running_academic_counter}")
+    st.metric("Minggu Akademik", f"{running_academic_counter}")
 with col_sb2:
     st.metric("Bukan Akademik", f"{minggu_bukan_akademik}")
 
@@ -438,6 +526,17 @@ st.sidebar.metric(
 
 st.sidebar.markdown("**Kelayakan Cuti Peristiwa**:")
 st.sidebar.info(f"{status_cuti}")
+
+st.sidebar.markdown("---")
+st.sidebar.markdown(
+    f'''
+    <div style="text-align: center; font-size: 11px; color: #6c757d; background-color: #f8f9fa; padding: 8px; border-radius: 6px; border: 1px solid #e9ecef;">
+        <p style="margin: 0; font-weight: 600;">🏷️ Versi Kod: <code>v{APP_VERSION}</code></p>
+        <p style="margin: 2px 0 0 0;">📅 Kemaskini: <b>{LAST_UPDATED_DATE}</b></p>
+    </div>
+    ''',
+    unsafe_allow_html=True
+)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown(
@@ -464,15 +563,21 @@ st.dataframe(df_final.drop(columns=["_mula_dt", "_tamat_dt", "_dt_tutup_erph"]),
 st.divider()
 
 # -------------------------------------------------------------
-# BAHAGIAN 4: EKSPORT KE EXCEL, PDF & ICS
+# BAHAGIAN 4: FUNGSI EKSPORT FAIL (PENAMBAHABAIKAN PRESTASI STATE)
 # -------------------------------------------------------------
-st.header("3. 📥 Muat Turun Kalendar & Cetakan Kemas (PDF)")
+st.header("📥 Muat Turun Kalendar & Cetakan Kemas (PDF)")
 
-def generate_excel_bytes():
-    """Penjanaan Excel mengikut susunan presisi tajuk & kad analisis contoh imej"""
+try:
+    excel_pwd = st.secrets["EXCEL_PASSWORD"]
+except Exception:
+    excel_pwd = "Sazahlie@9318"
+
+disclaimer_text = "Penafian: Sistem ini adalah alat bantuan pengurusan takwim sekolah secara dalam talian dan bukannya aplikasi rasmi Kementerian Pendidikan Malaysia (KPM). Maklumat takwim adalah tertakluk kepada pindaan rasmi KPM dari semasa ke semasa."
+
+def generate_excel_bytes(final_data, n_sekolah, k_sekolah, n_pentadbir, neg_pilihan, kump_pilihan, m_kpm, r_counter, s_akademik, m_bukan, j_hari, stat_cuti, thn, pwd_sec):
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = f"Kalender Sekolah {tahun}"
+    ws.title = f"Kalender Sekolah {thn}"
 
     font_title = Font(name="Segoe UI", size=13, bold=True, color="1F4E78")
     font_subtitle = Font(name="Segoe UI", size=11, bold=True, color="1F4E78")
@@ -482,32 +587,23 @@ def generate_excel_bytes():
     align_left = Alignment(horizontal="left", vertical="center")
     align_right = Alignment(horizontal="right", vertical="center")
 
-    # Row 1: Nama Sekolah & Kod Sekolah
     ws.merge_cells("A1:H1")
-    ws["A1"] = f"{nama_sekolah.upper()} ({kod_sekolah.upper()})"
+    ws["A1"] = f"{n_sekolah.upper()} ({k_sekolah.upper()})"
     ws["A1"].font = font_title
     ws["A1"].alignment = align_center
 
-    # Row 2: Tajuk Utama Kalender
     ws.merge_cells("A2:H2")
-    ws["A2"] = f"SISTEM KALENDER AKADEMIK & eRPH TAHUN {tahun}"
+    ws["A2"] = f"SISTEM KALENDER AKADEMIK & eRPH TAHUN {thn}"
     ws["A2"].font = font_subtitle
     ws["A2"].alignment = align_center
 
-    # Row 3: Nama Pengetua / Guru Besar & Maklumat Kumpulan
     ws.merge_cells("A3:H3")
-    ws["A3"] = f"PENGETUA / GURU BESAR: {nama_pentadbir.upper()} | NEGERI: {negeri_pilihan.upper()} ({kumpulan_pilihan.upper()})"
+    ws["A3"] = f"PENGETUA / GURU BESAR: {n_pentadbir.upper()} | NEGERI: {neg_pilihan.upper()} ({kump_pilihan.upper()})"
     ws["A3"].font = font_info
     ws["A3"].alignment = align_center
 
     ws.row_dimensions[4].height = 10
 
-    # -------------------------------------------------------------
-    # KAD ANALISIS EXCEL (PRESISI MENGIKUT GAMBAR CONTOH)
-    # Row 5: Tajuk Kad (A5:H5)
-    # Row 6: Minggu Persekolahan KPM: (A6:B6), [44 Minggu] (C6) | Minggu PdP (Akademik): (D6:E6), [40 / 40 Minggu] (F6) | Bukan Akademik: (G6), [1 Minggu] (H6)
-    # Row 7: Jumlah Hari Persekolahan: (A7:B7), [208 Hari] (C7) | Kelayakan Cuti Peristiwa: (D7:E7), [Layak 4 Hari (Lebihan 18 Hari)] (F7:H7)
-    # -------------------------------------------------------------
     card_hdr_fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
     card_body_fill = PatternFill(start_color="F9FAFB", end_color="F9FAFB", fill_type="solid")
     
@@ -520,29 +616,27 @@ def generate_excel_bytes():
         top=Side(style="thin", color="B0C4DE"), bottom=Side(style="thin", color="B0C4DE")
     )
 
-    # Row 5: Tajuk Kad
     ws.merge_cells("A5:H5")
     ws["A5"] = "📊 RINGKASAN ANALISIS PERSEKOLAHAN KPM"
     ws["A5"].font = card_hdr_font
     ws["A5"].fill = card_hdr_fill
     ws["A5"].alignment = align_center
 
-    # Row 6
     ws.merge_cells("A6:B6")
     ws["A6"] = "Minggu Persekolahan KPM:"
     ws["A6"].font = card_lbl_font
     ws["A6"].alignment = align_right
 
-    ws["C6"] = f"{minggu_persekolahan_kpm} Minggu"
+    ws["C6"] = f"{m_kpm} Minggu"
     ws["C6"].font = card_val_font
     ws["C6"].alignment = align_left
 
     ws.merge_cells("D6:E6")
-    ws["D6"] = "Minggu PdP (Akademik):"
+    ws["D6"] = "Minggu Akademik:"
     ws["D6"].font = card_lbl_font
     ws["D6"].alignment = align_right
 
-    ws["F6"] = f"{running_academic_counter} / {sasaran_akademik} Minggu"
+    ws["F6"] = f"{r_counter} / {s_akademik} Minggu"
     ws["F6"].font = card_val_font
     ws["F6"].alignment = align_left
 
@@ -550,17 +644,16 @@ def generate_excel_bytes():
     ws["G6"].font = card_lbl_font
     ws["G6"].alignment = align_right
 
-    ws["H6"] = f"{minggu_bukan_akademik} Minggu"
+    ws["H6"] = f"{m_bukan} Minggu"
     ws["H6"].font = card_val_font
     ws["H6"].alignment = align_left
 
-    # Row 7
     ws.merge_cells("A7:B7")
     ws["A7"] = "Jumlah Hari Persekolahan:"
     ws["A7"].font = card_lbl_font
     ws["A7"].alignment = align_right
 
-    ws["C7"] = f"{jumlah_hari_persekolahan} Hari"
+    ws["C7"] = f"{j_hari} Hari"
     ws["C7"].font = card_val_font
     ws["C7"].alignment = align_left
 
@@ -570,7 +663,7 @@ def generate_excel_bytes():
     ws["D7"].alignment = align_right
 
     ws.merge_cells("F7:H7")
-    ws["F7"] = f"{status_cuti_txt}"
+    ws["F7"] = f"{stat_cuti}"
     ws["F7"].font = card_val_font
     ws["F7"].alignment = align_left
 
@@ -583,19 +676,16 @@ def generate_excel_bytes():
                 cell.fill = card_body_fill
             cell.protection = Protection(locked=False)
 
-    # -------------------------------------------------------------
-    # HEADER JADUAL TAKWIM (BARIS 9)
-    # -------------------------------------------------------------
     headers = [
-        "Minggu Kalendar", "Tarikh Mula", "Tarikh Tamat", "Sabtu Kokum",
+        "Minggu Kalendar", "Tarikh Mula", "Tarikh Tamat", "Sabtu Kerja",
         "Jenis Minggu", "Minggu Akademik", "Catatan / Peristiwa", "Tarikh Penghantaran eRPH"
     ]
 
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
     header_font = Font(name="Segoe UI", size=10, bold=True, color="FFFFFF")
 
-    ws.append([]) # Row 8
-    ws.append(headers) # Row 9 Header Jadual
+    ws.append([])
+    ws.append(headers)
 
     for cell in ws[9]:
         cell.fill = header_fill
@@ -616,14 +706,14 @@ def generate_excel_bytes():
         top=Side(style="thin", color="D9D9D9"), bottom=Side(style="thin", color="D9D9D9")
     )
 
-    for r_idx, r in enumerate(final_rows, start=10):
+    for r_idx, r in enumerate(final_data, start=10):
         catatan_text = str(r["Catatan / Peristiwa"])
         lines = catatan_text.split("\n")
 
         ws.row_dimensions[r_idx].height = max(22, len(lines) * 18)
 
         row_vals = [
-            r["Minggu Kalendar"], r["Tarikh Mula"], r["Tarikh Tamat"], r["Sabtu Kokum"],
+            r["Minggu Kalendar"], r["Tarikh Mula"], r["Tarikh Tamat"], r["Sabtu Kerja"],
             r["Jenis Minggu"], r["Minggu Akademik"], catatan_text, r["Tarikh Penghantaran eRPH"]
         ]
         ws.append(row_vals)
@@ -655,21 +745,32 @@ def generate_excel_bytes():
         for col in range(1, 9):
             ws.cell(row=r, column=col).protection = Protection(locked=False)
 
-    last_row = len(final_rows) + 11
+    last_row = len(final_data) + 11
     ws.merge_cells(start_row=last_row, start_column=1, end_row=last_row, end_column=8)
     footer_cell = ws.cell(
         row=last_row,
         column=1,
-        value=f"🔒 Hakcipta Terpelihara © {tahun} Sazahlie S. (sazahlie.sapar@moe.edu.my) - Sistem Kalender Akademik & eRPH"
+        value=f"🔒 Hakcipta Terpelihara © {thn} Sazahlie S. (sazahlie.sapar@moe.edu.my) - Sistem Kalender Akademik & eRPH (Versi: v{APP_VERSION} | Kemaskini: {LAST_UPDATED_DATE})"
     )
     footer_cell.font = Font(name="Segoe UI", size=9, italic=False, color="0D6EFD", bold=True)
     footer_cell.alignment = align_center
     footer_cell.hyperlink = "mailto:sazahlie.sapar@moe.edu.my"
-
     footer_cell.protection = Protection(locked=True)
 
+    disc_row = last_row + 1
+    ws.merge_cells(start_row=disc_row, start_column=1, end_row=disc_row, end_column=8)
+    disc_cell = ws.cell(
+        row=disc_row,
+        column=1,
+        value=f"*{disclaimer_text}"
+    )
+    disc_cell.font = Font(name="Segoe UI", size=8, italic=True, color="7F7F7F")
+    disc_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    disc_cell.protection = Protection(locked=True)
+    ws.row_dimensions[disc_row].height = 25
+
     ws.protection.sheet = True
-    ws.protection.password = "Sazahlie@2027"
+    ws.protection.password = pwd_sec
     ws.protection.enable()
 
     for col in ws.columns:
@@ -693,8 +794,7 @@ def generate_excel_bytes():
     output.seek(0)
     return output.getvalue()
 
-def generate_pdf_bytes():
-    """Penjanaan PDF Cetakan Kemas (A4 Landscape) dengan Kad Analisis Presisi"""
+def generate_pdf_bytes(final_data, n_sekolah, k_sekolah, n_pentadbir, neg_pilihan, kump_pilihan, m_kpm, r_counter, s_akademik, m_bukan, j_hari, stat_cuti, thn):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -702,7 +802,7 @@ def generate_pdf_bytes():
         rightMargin=25,
         leftMargin=25,
         topMargin=25,
-        bottomMargin=25,
+        bottomMargin=30,
     )
 
     styles = getSampleStyleSheet()
@@ -724,26 +824,26 @@ def generate_pdf_bytes():
     card_val = ParagraphStyle('CardVal', fontName='Helvetica-Bold', fontSize=8, textColor=colors.HexColor('#0D6EFD'), alignment=0)
     card_hdr = ParagraphStyle('CardHdr', fontName='Helvetica-Bold', fontSize=8.5, textColor=colors.HexColor('#1F4E78'), alignment=1)
 
-    cell_style = ParagraphStyle('TableCell', parent=styles['Normal'], fontName='Helvetica', fontSize=7.5, leading=9, alignment=0)
-    cell_center_style = ParagraphStyle('TableCellCenter', parent=styles['Normal'], fontName='Helvetica', fontSize=7.5, leading=9, alignment=1)
+    cell_style = ParagraphStyle('TableCell', parent=styles['Normal'], fontName='Helvetica', fontSize=7, leading=8.5, alignment=0)
+    cell_center_style = ParagraphStyle('TableCellCenter', parent=styles['Normal'], fontName='Helvetica', fontSize=7, leading=8.5, alignment=1)
     cell_header_style = ParagraphStyle('TableHeaderCell', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=8, leading=10, textColor=colors.white, alignment=1)
 
     story = []
 
-    story.append(Paragraph(f"{nama_sekolah.upper()} ({kod_sekolah.upper()})", title_style))
-    story.append(Paragraph(f"SISTEM KALENDER AKADEMIK & eRPH TAHUN {tahun}", subtitle_style))
-    story.append(Paragraph(f"PENGETUA / GURU BESAR: {nama_pentadbir.upper()} | NEGERI: {negeri_pilihan.upper()} ({kumpulan_pilihan.upper()})", info_style))
+    story.append(Paragraph(f"{n_sekolah.upper()} ({k_sekolah.upper()})", title_style))
+    story.append(Paragraph(f"SISTEM KALENDER AKADEMIK & eRPH TAHUN {thn}", subtitle_style))
+    story.append(Paragraph(f"PENGETUA / GURU BESAR: {n_pentadbir.upper()} | NEGERI: {neg_pilihan.upper()} ({kump_pilihan.upper()})", info_style))
 
     card_pdf_data = [
         [Paragraph("📊 RINGKASAN ANALISIS PERSEKOLAHAN KPM", card_hdr), "", "", "", "", ""],
         [
-            Paragraph("Minggu Persekolahan KPM:", card_lbl), Paragraph(f"{minggu_persekolahan_kpm} Minggu", card_val),
-            Paragraph("Minggu PdP (Akademik):", card_lbl), Paragraph(f"{running_academic_counter} / {sasaran_akademik} Minggu", card_val),
-            Paragraph("Bukan Akademik:", card_lbl), Paragraph(f"{minggu_bukan_akademik} Minggu", card_val)
+            Paragraph("Minggu Persekolahan KPM:", card_lbl), Paragraph(f"{m_kpm} Minggu", card_val),
+            Paragraph("Minggu Akademik:", card_lbl), Paragraph(f"{r_counter} / {s_akademik} Minggu", card_val),
+            Paragraph("Bukan Akademik:", card_lbl), Paragraph(f"{m_bukan} Minggu", card_val)
         ],
         [
-            Paragraph("Jumlah Hari Persekolahan:", card_lbl), Paragraph(f"{jumlah_hari_persekolahan} Hari", card_val),
-            Paragraph("Kelayakan Cuti Peristiwa:", card_lbl), Paragraph(f"{status_cuti_txt}", card_val), "", ""
+            Paragraph("Jumlah Hari Persekolahan:", card_lbl), Paragraph(f"{j_hari} Hari", card_val),
+            Paragraph("Kelayakan Cuti Peristiwa:", card_lbl), Paragraph(f"{stat_cuti}", card_val), "", ""
         ]
     ]
 
@@ -764,13 +864,13 @@ def generate_pdf_bytes():
     story.append(Paragraph("<br/>", info_style))
 
     headers = [
-        "Minggu Kalendar", "Tarikh Mula", "Tarikh Tamat", "Sabtu Kokum",
+        "Minggu Kalendar", "Tarikh Mula", "Tarikh Tamat", "Sabtu Kerja",
         "Jenis Minggu", "Minggu Akademik", "Catatan / Peristiwa", "Tarikh Penghantaran eRPH"
     ]
     
     table_data = [[Paragraph(h, cell_header_style) for h in headers]]
 
-    for r in final_rows:
+    for r in final_data:
         jenis_str = str(r["Jenis Minggu"])
         catatan_formatted = str(r["Catatan / Peristiwa"]).replace('\n', '<br/>')
 
@@ -779,13 +879,13 @@ def generate_pdf_bytes():
         elif jenis_str == "Bukan Akademik":
             c_type_p = Paragraph(f"<b><font color='#C00080'>{jenis_str}</font></b>", cell_center_style)
         else:
-            c_type_p = Paragraph(jenis_str, cell_center_style)
+            c_type_p = Paragraph(f"<b><font color='#1F4E78'>{jenis_str}</font></b>", cell_center_style)
 
         row_cells = [
             Paragraph(str(r["Minggu Kalendar"]), cell_center_style),
             Paragraph(str(r["Tarikh Mula"]), cell_center_style),
             Paragraph(str(r["Tarikh Tamat"]), cell_center_style),
-            Paragraph(str(r["Sabtu Kokum"]), cell_center_style),
+            Paragraph(str(r["Sabtu Kerja"]), cell_center_style),
             c_type_p,
             Paragraph(str(r["Minggu Akademik"]), cell_center_style),
             Paragraph(catatan_formatted, cell_style),
@@ -801,11 +901,11 @@ def generate_pdf_bytes():
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D9D9D9')),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+        ('TOPPADDING', (0, 0), (-1, -1), 2.5),
     ]
 
-    for idx, r in enumerate(final_rows, start=1):
+    for idx, r in enumerate(final_data, start=1):
         jenis_str = str(r["Jenis Minggu"])
         catatan_str = str(r["Catatan / Peristiwa"]).upper()
 
@@ -821,11 +921,17 @@ def generate_pdf_bytes():
 
     def add_footer(canvas, doc):
         canvas.saveState()
-        canvas.setFont('Helvetica', 8)
-        canvas.setFillColor(colors.HexColor('#595959'))
+        canvas.setFont('Helvetica-Bold', 7.5)
+        canvas.setFillColor(colors.HexColor('#1F4E78'))
         canvas.drawCentredString(
-            landscape(A4)[0] / 2.0, 15,
-            f"🔒 Hakcipta Terpelihara © {tahun} Sazahlie S. (sazahlie.sapar@moe.edu.my) - Sistem Kalender Akademik & eRPH"
+            landscape(A4)[0] / 2.0, 18,
+            f"🔒 Hakcipta Terpelihara © {thn} Sazahlie S. (sazahlie.sapar@moe.edu.my) - Sistem Kalender Akademik & eRPH (Versi: v{APP_VERSION} | Kemaskini: {LAST_UPDATED_DATE})"
+        )
+        canvas.setFont('Helvetica-Oblique', 6.5)
+        canvas.setFillColor(colors.HexColor('#7F7F7F'))
+        canvas.drawCentredString(
+            landscape(A4)[0] / 2.0, 9,
+            f"*{disclaimer_text}"
         )
         canvas.restoreState()
 
@@ -834,27 +940,26 @@ def generate_pdf_bytes():
     buffer.seek(0)
     return buffer.getvalue()
 
-def generate_ics_text():
-    """Penjanaan Fail Kalendar Digital (.ics)"""
+def generate_ics_text(final_data, n_sekolah, k_sekolah, n_pentadbir):
     ics_lines = [
         "BEGIN:VCALENDAR", "VERSION:2.0",
-        f"PRODID:-//{nama_sekolah}//Sistem Kalender Akademik & eRPH Sazahlie S.//MY",
+        f"PRODID:-//{n_sekolah}//Sistem Kalender Akademik & eRPH Sazahlie S.//MY",
         "CALSCALE:GREGORIAN", "METHOD:PUBLISH"
     ]
     now_str = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
-    for r in final_rows:
+    for r in final_data:
         mula_str = r["_mula_dt"].strftime("%Y%m%d")
         tamat_str = (r["_tamat_dt"] + timedelta(days=1)).strftime("%Y%m%d")
 
         ics_lines.extend([
             "BEGIN:VEVENT",
-            f"UID:kalender-{mula_str}-{r['Minggu Kalendar'].replace(' ', '')}@{kod_sekolah.lower()}",
+            f"UID:kalender-{mula_str}-{r['Minggu Kalendar'].replace(' ', '')}@{k_sekolah.lower()}",
             f"DTSTAMP:{now_str}",
             f"DTSTART;VALUE=DATE:{mula_str}",
             f"DTEND;VALUE=DATE:{tamat_str}",
             f"SUMMARY:{r['Minggu Kalendar']} - {r['Jenis Minggu']} (M{r['Minggu Akademik']})",
-            f"DESCRIPTION:Sekolah: {nama_sekolah}\nPengetua/GB: {nama_pentadbir}\nCatatan: {r['Catatan / Peristiwa']}\nHakcipta © Sazahlie S. (sazahlie.sapar@moe.edu.my)",
+            f"DESCRIPTION:Sekolah: {n_sekolah}\nPengetua/GB: {n_pentadbir}\nCatatan: {r['Catatan / Peristiwa']}\nHakcipta © Sazahlie S. (sazahlie.sapar@moe.edu.my)\nVersi: v{APP_VERSION}\n{disclaimer_text}",
             "END:VEVENT"
         ])
 
@@ -869,7 +974,11 @@ col_btn1, col_btn2, col_btn3 = st.columns(3)
 with col_btn1:
     st.download_button(
         label="📥 Muat Turun Fail Excel (.xlsx)",
-        data=generate_excel_bytes(),
+        data=generate_excel_bytes(
+            final_rows, nama_sekolah, kod_sekolah, nama_pentadbir, negeri_pilihan, 
+            kumpulan_pilihan, minggu_persekolahan_kpm, running_academic_counter, 
+            sasaran_akademik, minggu_bukan_akademik, jumlah_hari_persekolahan, status_cuti_txt, tahun, excel_pwd
+        ),
         file_name=f"Kalender_{kod_sekolah.upper()}_{tahun}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
@@ -878,7 +987,11 @@ with col_btn1:
 with col_btn2:
     st.download_button(
         label="🖨️ Muat Turun Cetakan Kemas (.pdf)",
-        data=generate_pdf_bytes(),
+        data=generate_pdf_bytes(
+            final_rows, nama_sekolah, kod_sekolah, nama_pentadbir, negeri_pilihan, 
+            kumpulan_pilihan, minggu_persekolahan_kpm, running_academic_counter, 
+            sasaran_akademik, minggu_bukan_akademik, jumlah_hari_persekolahan, status_cuti_txt, tahun
+        ),
         file_name=f"Kalender_{kod_sekolah.upper()}_{tahun}.pdf",
         mime="application/pdf",
         help="Format PDF saiz A4 Lanskap yang sedia dicetak terus dengan susunan rasmi yang kemas.",
@@ -888,18 +1001,19 @@ with col_btn2:
 with col_btn3:
     st.download_button(
         label="📲 Muat Turun Kalendar Digital (.ics)",
-        data=generate_ics_text(),
+        data=generate_ics_text(final_rows, nama_sekolah, kod_sekolah, nama_pentadbir),
         file_name=f"Kalender_{kod_sekolah.upper()}_{tahun}.ics",
         mime="text/calendar",
         use_container_width=True,
     )
 
-# Footer Laman Web
+# Footer Laman Web & Penafian Rasmi (Disclaimer)
 st.markdown("---")
 st.markdown(
-    '''
-    <div style="text-align: center; font-size: 13px; color: #6c757d; padding: 10px 0;">
-        🔒 <b>Hakcipta Terpelihara © Sazahlie S.</b> | 📧 E-mel: <a href="mailto:sazahlie.sapar@moe.edu.my" style="color: #0d6efd; text-decoration: none; font-weight: 600;">sazahlie.sapar@moe.edu.my</a>
+    f'''
+    <div style="text-align: center; font-size: 12px; color: #6c757d; padding: 10px 0;">
+        <p style="margin-bottom: 4px;">🔒 <b>Hakcipta Terpelihara © Sazahlie S.</b> | 📧 E-mel: <a href="mailto:sazahlie.sapar@moe.edu.my" style="color: #0d6efd; text-decoration: none; font-weight: 600;">sazahlie.sapar@moe.edu.my</a> | 🏷️ Versi: <code>v{APP_VERSION}</code> (Kemaskini: {LAST_UPDATED_DATE})</p>
+        <p style="margin: 0; font-size: 11px; color: #8c959f;"><i>{disclaimer_text}</i></p>
     </div>
     ''',
     unsafe_allow_html=True
